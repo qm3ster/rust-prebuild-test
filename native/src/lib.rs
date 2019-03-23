@@ -86,11 +86,11 @@ struct FutureTask<T>(Cell<Option<T>>)
 where
     T: 'static + Send + Sized + Future;
 
-fn new_future_task<F>(future: F) -> FutureTask<F>
-where
-    F: 'static + Send + Sized + Future,
-{
-    FutureTask(Cell::new(Some(future)))
+impl<T> FutureTask<T>
+where T : 'static + Send + Sized + Future {
+    fn new(future: T) -> FutureTask<T> {
+        FutureTask(Cell::new(Some(future)))
+    }
 }
 
 impl<T> Task for FutureTask<T>
@@ -133,7 +133,7 @@ declare_types! {
                 let guard = cx.lock();
                 let this = &mut this.borrow_mut(&guard);
                 let tx = this.tx.clone();
-                new_future_task(tx.send(Command::Write(text))).schedule(cb);
+                FutureTask::new(tx.send(Command::Write(text))).schedule(cb);
             }
             Ok(cx.undefined().upcast())
         }
@@ -145,7 +145,7 @@ declare_types! {
                 let guard = cx.lock();
                 let this = &mut this.borrow_mut(&guard);
                 let tx = this.tx.clone();
-                new_future_task(tx.send(Command::Close)).schedule(cb);
+                FutureTask::new(tx.send(Command::Close)).schedule(cb);
             }
             Ok(cx.undefined().upcast())
         }
