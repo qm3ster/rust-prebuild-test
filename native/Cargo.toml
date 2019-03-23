@@ -1,0 +1,21 @@
+[package]
+name = "rust-prebuild-test"
+version = "0.1.0"
+authors = ["qm3ster <qm3ster@gmail.com>"]
+edition = "2018"
+license = "MIT"
+build = "build.rs"
+exclude = ["artifacts.json", "index.node"]
+
+[lib]
+name = "rust_prebuild_test"
+crate-type = ["dylib"]
+
+[build-dependencies]
+neon-build = "0.2.0"
+
+[dependencies]
+neon = "0.2.0"
+tokio-serial = "3.2.0"
+tokio = {version = "0.1.17", features = ["async-await-preview"]}
+futures = "0.1.25"

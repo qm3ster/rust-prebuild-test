@@ -1,0 +1,12 @@
+{
+	"folders": [
+		{
+			"name": "Rust",
+			"path": "native"
+		},
+		{
+			"path": "."
+		}
+	],
+	"settings": {}
+}
