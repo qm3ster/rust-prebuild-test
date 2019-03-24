@@ -14,6 +14,7 @@ use tokio_serial::{Serial, SerialPort};
 
 struct BackroundTask {
     rx: Cell<Option<mpsc::Receiver<Command>>>,
+    tx: Cell<Option<mpsc::Sender<String>>>,
     path: String,
 }
 impl Task for BackroundTask {
@@ -24,6 +25,7 @@ impl Task for BackroundTask {
     fn perform(&self) -> Result<Self::Output, Self::Error> {
         println!("PERFORM");
         let rx = self.rx.take().unwrap();
+        let tx = self.tx.take().unwrap();
         let path = self.path.clone();
         tokio::run_async(
             async {
@@ -36,8 +38,17 @@ impl Task for BackroundTask {
                 let (ctx, crx) = oneshot::channel();
                 tokio::spawn_async(
                     async {
-                        await!(tokio::io::copy(srx, tokio::io::stdout()).select2(crx));
-                        println!("stopped copying");
+                        let mut tx = tx;
+                        let lines = tokio::io::lines(std::io::BufReader::new(srx));
+                        let reading = lines
+                            .or_else(|err| {
+                                Ok::<_, tokio::sync::mpsc::error::SendError>(
+                                    "[LMAO ERROR]".to_string(),
+                                )
+                            })
+                            .forward(tx);
+                        await!(reading.select2(crx));
+                        println!("stopped reading");
                     },
                 );
                 // tokio::spawn(
@@ -72,22 +83,14 @@ enum Command {
     Close,
 }
 
-pub struct MySerialPort {
-    tx: mpsc::Sender<Command>,
-}
-
-impl Drop for MySerialPort {
-    fn drop(&mut self) {
-        println!("Dropping!");
-    }
-}
-
 struct FutureTask<T>(Cell<Option<T>>)
 where
     T: 'static + Send + Sized + Future;
 
 impl<T> FutureTask<T>
-where T : 'static + Send + Sized + Future {
+where
+    T: 'static + Send + Sized + Future,
+{
     fn new(future: T) -> FutureTask<T> {
         FutureTask(Cell::new(Some(future)))
     }
@@ -114,15 +117,26 @@ where
     }
 }
 
+pub struct MySerialPort {
+    tx: mpsc::Sender<Command>,
+    rx: stream::Peekable<mpsc::Receiver<String>>,
+}
+
+impl Drop for MySerialPort {
+    fn drop(&mut self) {
+        println!("Dropping!");
+    }
+}
+
 declare_types! {
-    pub class JsSerialPort for MySerialPort {
+    pub class JsSerialPort for MySerialPort{
         init(mut cx) {
             let path: String = cx.argument::<JsString>(0)?.value();
-            let cb = cx.argument::<JsFunction>(1)?;
-            let (tx, rx) = mpsc::channel(1);
-            let rx = Cell::new(Some(rx));
-            BackroundTask{rx, path}.schedule(cb);
-            Ok(MySerialPort {tx})
+            let close_cb = cx.argument::<JsFunction>(1)?;
+            let (from_js, to_ser) = mpsc::channel(1);
+            let (from_ser, to_js) = mpsc::channel(1);
+            BackroundTask{rx:Cell::new(Some(to_ser)), tx:Cell::new(Some(from_ser)), path}.schedule(close_cb);
+            Ok(MySerialPort{rx:to_js.peekable(),tx:from_js})
         }
 
         method write(mut cx) {
@@ -136,6 +150,24 @@ declare_types! {
                 FutureTask::new(tx.send(Command::Write(text))).schedule(cb);
             }
             Ok(cx.undefined().upcast())
+        }
+
+        method poll_read(mut cx) {
+            // let cb = cx.argument::<JsFunction>(0)?;
+            let pollage = {
+                let mut this = cx.this();
+                let guard = cx.lock();
+                let this = &mut this.borrow_mut(&guard);
+                let rx = &mut this.rx;
+                rx.poll()
+            };
+            match pollage{
+                Ok(Async::Ready(Some(s)))=>Ok(cx.string(&s).upcast()),
+                _=> {
+                    // FutureTask::new(future::poll_fn(||rx.peek())).schedule(cb);
+                    Ok(cx.undefined().upcast())
+                }
+            }
         }
 
         method close(mut cx) {
@@ -152,10 +184,7 @@ declare_types! {
     }
 }
 
-// Export the class
 register_module!(mut m, {
-    // <JsSerialPort> tells neon what class we are exporting
-    // "SerialPort" is the name of the export that the class is exported as
     m.export_class::<JsSerialPort>("SerialPort")?;
     Ok(())
 });
